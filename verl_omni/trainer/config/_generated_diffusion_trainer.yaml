@@ -25,7 +25,8 @@ actor_rollout_ref:
       warmup_style: null
       override_optimizer_config: null
     fsdp_config:
-      _target_: verl.workers.config.FSDPEngineConfig
+      _target_: verl_omni.workers.config.FSDPDiffusionEngineConfig
+      enable_timestep_staging: false
       wrap_policy:
         min_num_params: 0
       param_offload: false
@@ -112,7 +113,8 @@ actor_rollout_ref:
     strategy: ${actor_rollout_ref.actor.strategy}
     log_prob_micro_batch_size_per_gpu: null
     fsdp_config:
-      _target_: verl.workers.config.FSDPEngineConfig
+      _target_: verl_omni.workers.config.FSDPDiffusionEngineConfig
+      enable_timestep_staging: false
       wrap_policy:
         min_num_params: 0
       param_offload: false

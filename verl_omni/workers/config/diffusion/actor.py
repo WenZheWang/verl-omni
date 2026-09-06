@@ -27,6 +27,7 @@ from .model import DiffusionModelConfig
 
 __all__ = [
     "DiffusionLossConfig",
+    "FSDPDiffusionEngineConfig",
     "VeOmniDiffusionEngineConfig",
     "VeOmniDiffusionOptimizerConfig",
     "DiffusionActorConfig",
@@ -69,6 +70,18 @@ class DiffusionLossConfig(BaseConfig):
             raise ValueError(f"adaptive_weight_min must be positive, got {self.adaptive_weight_min}.")
         if self.kl_mask_threshold <= 0:
             raise ValueError(f"kl_mask_threshold must be positive, got {self.kl_mask_threshold}.")
+
+
+@dataclass
+class FSDPDiffusionEngineConfig(FSDPEngineConfig):
+    """FSDP options for diffusion training, including opt-in Qwen-Image input staging."""
+
+    enable_timestep_staging: bool = False
+
+    def __post_init__(self):
+        super().__post_init__()
+        if self.enable_timestep_staging and self.ulysses_sequence_parallel_size != 1:
+            raise ValueError("Timestep staging requires ulysses_sequence_parallel_size=1.")
 
 
 @dataclass
@@ -185,7 +198,7 @@ class FSDPDiffusionActorConfig(DiffusionActorConfig):
     # Training strategy: fsdp or fsdp2
     strategy: str = "fsdp"
     grad_clip: float = 1.0
-    fsdp_config: FSDPEngineConfig = field(default_factory=FSDPEngineConfig)
+    fsdp_config: FSDPDiffusionEngineConfig = field(default_factory=FSDPDiffusionEngineConfig)
 
     def __post_init__(self):
         """Validate diffusion FSDP actor configuration parameters."""
