@@ -7,7 +7,7 @@ Below are reference benchmark results for VeRL-Omni training runs.
 
 ## DAPO Phase 1: LoRA Training on Qwen3-Omni Thinker AVQA
 
-This reference uses the [Thinker DAPO Phase-1 recipe](../examples/dapo_trainer.md):
+This reference uses the {doc}`Thinker DAPO Phase-1 recipe <../examples/dapo_trainer>`:
 vanilla token-level clipping with GRPO advantages, without dynamic sampling or
 overlong reward shaping. It is a single-seed run on AVQA, not the full DAPO recipe.
 
