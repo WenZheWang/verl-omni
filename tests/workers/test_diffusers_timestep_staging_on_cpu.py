@@ -15,20 +15,25 @@
 
 import weakref
 from contextlib import nullcontext
+from inspect import unwrap
 from pathlib import Path
 from types import SimpleNamespace
 
 import pytest
 import torch
 from hydra import compose, initialize_config_dir
+from omegaconf import OmegaConf
 from tensordict import TensorDict
 from verl.utils import tensordict_utils as tu
 from verl.utils.config import omega_conf_to_dataclass
+from verl.workers.config import FSDPEngineConfig
 
 import verl_omni
 from verl_omni.pipelines.schedulers import FlowMatchSDEDiscreteScheduler
-from verl_omni.workers.config import FSDPDiffusionEngineConfig
+from verl_omni.utils.config import validate_config
+from verl_omni.workers.config import FSDPDiffusionActorConfig
 from verl_omni.workers.engine.fsdp import diffusers_impl
+from verl_omni.workers.engine_workers import ActorRolloutRefWorker
 
 PPO_OPTIONAL = (
     "ref_log_prob",
@@ -99,7 +104,13 @@ def transfer_spy(monkeypatch):
 def _engine(algorithm, staging):
     cls = diffusers_impl.PPODiffusersFSDPEngine if algorithm == "ppo" else diffusers_impl.NFTDiffusersFSDPEngine
     engine = object.__new__(cls)
-    engine.engine_config = FSDPDiffusionEngineConfig(enable_timestep_staging=staging)
+    train_batch = engine.train_batch
+
+    def train_with_staging(data, loss_function):
+        tu.assign_non_tensor(data, enable_timestep_staging=staging)
+        return train_batch(data, loss_function)
+
+    engine.train_batch = train_with_staging
     engine.ulysses_sequence_parallel_size = 1
     engine.ulysses_device_mesh = None
     engine.get_data_parallel_group = lambda: None
@@ -205,7 +216,7 @@ def test_inference_bypasses_staging(transfer_spy, algorithm):
     candidate, observed = _engine(algorithm, staging=True)
     reference, _ = _engine(algorithm, staging=False)
     batch = _batch(algorithm)
-    tu.assign_non_tensor(batch, return_model_output=False)
+    tu.assign_non_tensor(batch, return_model_output=False, enable_timestep_staging=True)
     actual = candidate.infer_batch(batch)
     expected = reference.infer_batch(batch.clone())
     torch.testing.assert_close(
@@ -271,29 +282,6 @@ def test_invalid_staging_input_fails_before_forward(transfer_spy, case):
     assert not transfer_spy.shared and not transfer_spy.steps
 
 
-@pytest.mark.parametrize(
-    "architecture,algorithm,strategy,sp,gpu",
-    [
-        ("StableDiffusion3Pipeline", "flow_grpo", "fsdp", 1, True),
-        ("QwenImagePipeline", "dpo", "fsdp", 1, True),
-        ("QwenImagePipeline", "flow_grpo", "veomni", 1, True),
-        ("QwenImagePipeline", "flow_grpo", "fsdp", 2, True),
-        ("QwenImagePipeline", "flow_grpo", "fsdp", 1, False),
-    ],
-)
-def test_unsupported_staging_rejected_before_distributed_init(monkeypatch, architecture, algorithm, strategy, sp, gpu):
-    monkeypatch.setattr(diffusers_impl, "is_cuda_available", gpu)
-
-    def unexpected_rank():
-        pytest.fail("unsupported staging must fail before distributed initialization")
-
-    monkeypatch.setattr(torch.distributed, "get_rank", unexpected_rank)
-    model = SimpleNamespace(architecture=architecture, algorithm=algorithm)
-    config = SimpleNamespace(enable_timestep_staging=True, strategy=strategy, ulysses_sequence_parallel_size=sp)
-    with pytest.raises(ValueError, match="staging"):
-        diffusers_impl.PPODiffusersFSDPEngine(model, config, None, None)
-
-
 @pytest.mark.parametrize("strategy", ["fsdp", "fsdp2"])
 @pytest.mark.parametrize("enabled", [False, True])
 def test_hydra_actor_forwards_timestep_staging(strategy, enabled):
@@ -304,33 +292,82 @@ def test_hydra_actor_forwards_timestep_staging(strategy, enabled):
             overrides=[
                 f"strategy={strategy}",
                 "ppo_micro_batch_size_per_gpu=2",
-                f"fsdp_config.enable_timestep_staging={str(enabled).lower()}",
+                f"enable_timestep_staging={str(enabled).lower()}",
             ],
         )
     actor = omega_conf_to_dataclass(cfg)
-    assert isinstance(actor.engine, FSDPDiffusionEngineConfig)
+    assert isinstance(actor, FSDPDiffusionActorConfig)
+    assert type(actor.engine) is FSDPEngineConfig
     assert actor.engine is actor.fsdp_config
-    assert actor.engine.enable_timestep_staging is enabled
+    assert actor.enable_timestep_staging is enabled
+    assert not hasattr(actor.engine, "enable_timestep_staging")
     assert actor.engine.strategy == strategy
 
 
-def test_staging_defaults_and_sequence_parallel_guard():
-    assert FSDPDiffusionEngineConfig().enable_timestep_staging is False
-    with pytest.raises(ValueError, match="sequence_parallel_size=1"):
-        FSDPDiffusionEngineConfig(enable_timestep_staging=True, ulysses_sequence_parallel_size=2)
-
-
 @pytest.mark.parametrize("enabled", [False, True])
-def test_public_trainer_override_reaches_actor_engine(enabled):
+def test_public_trainer_override_reaches_actor_worker(enabled):
     config_dir = Path(verl_omni.__file__).parent / "trainer/config"
     overrides = ["actor_rollout_ref.actor.ppo_micro_batch_size_per_gpu=2"]
     if enabled:
-        overrides.append("actor_rollout_ref.actor.fsdp_config.enable_timestep_staging=true")
+        overrides.append("actor_rollout_ref.actor.enable_timestep_staging=true")
     with initialize_config_dir(config_dir=str(config_dir), version_base=None):
         cfg = compose(config_name="diffusion_trainer", overrides=overrides)
+    validate_config(cfg)
     actor = omega_conf_to_dataclass(cfg.actor_rollout_ref.actor)
-    assert isinstance(actor.engine, FSDPDiffusionEngineConfig)
-    assert actor.engine.enable_timestep_staging is enabled
+    assert actor.enable_timestep_staging is enabled
+    assert type(actor.engine) is FSDPEngineConfig
+    ref = omega_conf_to_dataclass(cfg.actor_rollout_ref.ref)
+    assert not ref.enable_timestep_staging
+    assert type(ref.engine) is FSDPEngineConfig
+
+    received = []
+
+    def train_mini_batch(data):
+        received.append(tu.get_non_tensor_data(data, "enable_timestep_staging", default=None))
+        return None
+
+    worker = SimpleNamespace(config=cfg.actor_rollout_ref, actor=SimpleNamespace(train_mini_batch=train_mini_batch))
+    batch = TensorDict({}, batch_size=[2])
+    tu.assign_non_tensor(batch, enable_timestep_staging=not enabled)
+    unwrap(ActorRolloutRefWorker.update_actor)(worker, batch)
+    assert received == [enabled]
+
+
+@pytest.mark.parametrize("entrypoint", ["main_diffusion", "main_diffusion_v1"])
+def test_public_config_rejects_staging_with_sequence_parallel(monkeypatch, entrypoint):
+    import importlib
+
+    config_dir = Path(verl_omni.__file__).parent / "trainer/config"
+    with initialize_config_dir(config_dir=str(config_dir), version_base=None):
+        cfg = compose(
+            config_name="diffusion_trainer",
+            overrides=[
+                "actor_rollout_ref.actor.enable_timestep_staging=true",
+                "actor_rollout_ref.actor.fsdp_config.ulysses_sequence_parallel_size=2",
+            ],
+        )
+    with pytest.raises(ValueError, match="sequence_parallel_size=1"):
+        validate_config(cfg)
+    module = importlib.import_module(f"verl_omni.trainer.{entrypoint}")
+    monkeypatch.setattr(module, "auto_set_device", lambda config: None)
+    with pytest.raises(ValueError, match="sequence_parallel_size=1"):
+        module.main.__wrapped__(cfg)
+
+
+def test_worker_without_staging_config_resets_batch_flag():
+    received = []
+    worker = SimpleNamespace(
+        config=OmegaConf.create({"actor": {}}),
+        actor=SimpleNamespace(
+            train_mini_batch=lambda data: received.append(
+                tu.get_non_tensor_data(data, "enable_timestep_staging", default=None)
+            )
+        ),
+    )
+    batch = TensorDict({}, batch_size=[1])
+    tu.assign_non_tensor(batch, enable_timestep_staging=True)
+    unwrap(ActorRolloutRefWorker.update_actor)(worker, batch)
+    assert received == [False]
 
 
 @pytest.mark.parametrize(

@@ -32,7 +32,7 @@ from verl.trainer.config import CheckpointConfig
 from verl.utils import tensordict_utils as tu
 from verl.utils.checkpoint.fsdp_checkpoint_manager import FSDPCheckpointManager
 from verl.utils.debug import log_gpu_memory_usage
-from verl.utils.device import get_device_id, get_device_name, is_cuda_available
+from verl.utils.device import get_device_id, get_device_name
 from verl.utils.fsdp_utils import (
     CPUOffloadPolicy,
     FSDPModule,
@@ -134,17 +134,6 @@ class DiffusersFSDPEngine(LoRAAdapterMixin, BaseEngine, ABC):
         self.engine_config = engine_config
         self.optimizer_config = optimizer_config
         self.checkpoint_config = checkpoint_config
-
-        if getattr(engine_config, "enable_timestep_staging", False):
-            if model_config.architecture != "QwenImagePipeline" or model_config.algorithm not in {
-                "flow_grpo",
-                "diffusion_nft",
-            }:
-                raise ValueError("Timestep staging supports only QwenImagePipeline flow_grpo/diffusion_nft.")
-            if engine_config.strategy not in {"fsdp", "fsdp2"} or engine_config.ulysses_sequence_parallel_size != 1:
-                raise ValueError("Timestep staging requires FSDP/FSDP2 with sequence parallel size 1.")
-            if not is_cuda_available:
-                raise ValueError("Timestep staging currently requires a GPU runtime.")
 
         self.mode = None
 
@@ -984,7 +973,7 @@ class DiffusersFSDPEngine(LoRAAdapterMixin, BaseEngine, ABC):
         *,
         timesteps_key: str,
     ) -> dict:
-        stage_inputs = getattr(self.engine_config, "enable_timestep_staging", False) and not forward_only
+        stage_inputs = tu.get_non_tensor_data(data, "enable_timestep_staging", default=False) and not forward_only
         if stage_inputs:
             step_fields, shared_keys = self._prepare_timestep_staging(data, timesteps_key)
         num_timesteps = int(data[timesteps_key].shape[1])

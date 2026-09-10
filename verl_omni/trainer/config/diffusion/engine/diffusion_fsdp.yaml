@@ -1,8 +1,5 @@
 # Target class for this configuration
-_target_: verl_omni.workers.config.FSDPDiffusionEngineConfig
-
-# Stage Qwen-Image training inputs from CPU per timestep (FSDP/FSDP2, GPU, SP=1).
-enable_timestep_staging: false
+_target_: verl.workers.config.FSDPEngineConfig
 
 # policy for wrapping the model
 wrap_policy:

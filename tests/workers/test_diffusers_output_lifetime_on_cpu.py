@@ -36,7 +36,6 @@ def engine_case(request, monkeypatch):
         engine = object.__new__(engine_cls)
         engine.ulysses_sequence_parallel_size = 1
         engine.ulysses_device_mesh = None
-        engine.engine_config = SimpleNamespace(enable_timestep_staging=False)
         engine.module = torch.nn.Linear(2, 2, bias=False, dtype=torch.float64)
         with torch.no_grad():
             engine.module.weight.copy_(torch.tensor([[0.1, 0.2], [0.3, 0.4]], dtype=torch.float64))

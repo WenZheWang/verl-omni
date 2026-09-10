@@ -28,7 +28,7 @@ For Qwen-Image FlowGRPO or DiffusionNFT training with FSDP/FSDP2 on GPU and
 `ulysses_sequence_parallel_size=1`, enable:
 
 ```bash
-actor_rollout_ref.actor.fsdp_config.enable_timestep_staging=true
+actor_rollout_ref.actor.enable_timestep_staging=true
 ```
 
 This default-false option keeps the caller's trajectory on CPU, copies shared
@@ -39,11 +39,17 @@ and transfers per-step noise when supplied. Dtypes, step order and gradient
 accumulation are unchanged. Unused driver tensors are not copied to the device.
 Consumed tensor inputs must be on CPU and must not require gradients.
 
-Only `QwenImagePipeline` with `flow_grpo` or `diffusion_nft` is supported; enabling
-staging for another model, algorithm, backend, or sequence-parallel size fails
-explicitly. Inference keeps its existing input/output behavior. Training output
+The validated scope is `QwenImagePipeline` with `flow_grpo` or `diffusion_nft`
+on GPU, FSDP/FSDP2 and SP=1; see the
+[Qwen-Image README](../../examples/flowgrpo_trainer/qwen_image/README.md#optional-timestep-input-staging).
+The shared engine does not enforce a model/device allowlist; trainer config
+validation rejects sequence parallelism. Inference keeps its existing input/output behavior. Training output
 opt-in still works, but retaining those outputs reintroduces trajectory-length
 dependent output memory.
+
+Direct engine callers can set `tu.assign_non_tensor(batch, enable_timestep_staging=True)`
+on a training batch. The public actor worker supplies this metadata from its actor
+configuration; the reference engine uses the unchanged upstream `FSDPEngineConfig`.
 
 Transfers are synchronous: there is no prefetch, pinned-memory pool, or overlap
 guarantee. Full CPU trajectory storage is unchanged. Measure both peak allocated/
