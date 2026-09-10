@@ -2,7 +2,7 @@
 
 Last updated: 09/10/2026
 
-See the [FlowGRPO trainer guide](../README.md) for installation, OCR data and
+See the [FlowGRPO trainer guide](../../../docs/examples/flowgrpo_trainer.md) for installation, OCR data and
 reward-model setup.
 
 ## Optional timestep input staging
@@ -17,7 +17,7 @@ bash examples/flowgrpo_trainer/qwen_image/run_qwen_image_ocr_lora.sh \
 ```
 
 The same override works with the
-[Qwen-Image DiffusionNFT recipe](../../diffusionnft_trainer/README.md).
+[Qwen-Image DiffusionNFT recipe](../../../docs/examples/diffusionnft_trainer.md).
 It keeps the caller's trajectory on CPU, copies shared prompt conditions once
 per micro-batch, then transfers the current timestep's inputs. FlowGRPO stages
 the current/next latent pair and matching loss fields; DiffusionNFT keeps the
