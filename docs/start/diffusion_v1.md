@@ -1,6 +1,6 @@
 # Diffusion V1 training
 
-Last updated: 09/01/2026
+Last updated: 09/11/2026
 
 This guide runs the diffusion V1 trainer in synchronous or separate-asynchronous
 mode using the provided Stable Diffusion 3.5 Medium FlowGRPO OCR recipes. The V1
@@ -132,6 +132,20 @@ bash examples/flowgrpo_trainer/sd35/run_sd35_medium_ocr_lora_v1_separate_async.s
 `sync_compatible=true` pauses standalone generation during actor updates. It
 requires `num_warmup_batches=0`; set it to `false` to retain rollout/training
 overlap.
+
+### Qwen-Image LoRA policy snapshots
+
+For Qwen-Image (`QwenImagePipeline`) with FSDP2, a single `default` LoRA
+adapter and sequence parallel size 1, separate-async CPU snapshots retain only
+the trainable parameters. This includes any trainable parameters outside the
+LoRA layers. The cycle-start `π_old` and current-actor restoration semantics
+are unchanged; no new configuration is required.
+
+This reduces the snapshot payload, not the cost of materializing the actor
+when manual parameter offload is enabled. FSDP1, other models/backends,
+multiple policy adapters, native FSDP2 CPU offload policy, and full-parameter
+training retain full snapshots. Changing the trainable parameter set or shard
+layout within a snapshot's lifetime is unsupported and fails before restore.
 
 ## Important settings
 
